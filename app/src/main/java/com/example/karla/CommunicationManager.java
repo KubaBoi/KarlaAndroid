@@ -1,12 +1,13 @@
 package com.example.karla;
 
-import android.provider.DocumentsContract;
 import android.util.Log;
 
-import java.io.BufferedInputStream;
-import java.io.DataOutputStream;
+import org.json.JSONObject;
+
+import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -14,33 +15,54 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
 public class CommunicationManager {
 
     private String LOG_TAG = "COMMUNICATION";
-    private String wavFile;
+    private String inputFile;
+    private String outputFile;
 
-    public void start(String wavFile) {
-        this.wavFile = wavFile;
+    private BufferedOutputStream wr;
+    private InputStream in;
+
+    public void start(String inputFile, String outputFile) {
+        this.inputFile = inputFile;
+        this.outputFile = outputFile;
     }
 
-    public void sendWavFile() {
+    public boolean getFromSound() {
+        byte[] bytesArray = new byte[0];
         try {
-            File file = new File(wavFile);
-            int size = (int) file.length();
-            byte[] bytes = new byte[size];
+            Path file = Paths.get(inputFile);
+            bytesArray = Files.readAllBytes(file);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
 
-            sendPost("/recognition/fromWav", bytes);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+        try {
+            return getMp3("/recognition/fromWav", bytesArray);
+        } catch (IOException e) {
+            e.printStackTrace();
+            return false;
         }
     }
 
-    public void sendPost(String surl, byte[] bytes) throws IOException {
+    public boolean getFromJson(JSONObject json) {
+        try {
+            return getMp3("/recognition/toMp3", json.toString().getBytes(StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    public boolean getMp3(String surl, byte[] bytes) throws IOException {
         URL url = new URL("http://192.168.0.110:8004" + surl);
         HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
 
-        String data = "";
+        boolean ret = false;
 
         try {
             Log.e(LOG_TAG, "Sending POST: " + url.getPath());
@@ -48,43 +70,59 @@ public class CommunicationManager {
 
             urlConnection.setDoOutput(true);
 
-            DataOutputStream wr = new DataOutputStream(urlConnection.getOutputStream());
-            wr.write(bytes);
+            wr = new BufferedOutputStream(urlConnection.getOutputStream());
+            wr.write(bytes, 0, bytes.length);
             wr.flush();
             wr.close();
 
             InputStream in = urlConnection.getInputStream();
-            Log.e(LOG_TAG, readStream(new InputStreamReader(in)));
+            byte[] data = readByteStream(in);
+
+            File file = new File(outputFile);
+            if (!file.exists()) {
+                file.createNewFile();
+            }
+            FileOutputStream stream = new FileOutputStream(outputFile);
+            stream.write(data);
+            Log.e(LOG_TAG, "File was saved");
+            ret = true;
         }
         catch (Exception e) {
-            InputStream in = urlConnection.getErrorStream();
+            in = urlConnection.getErrorStream();
             Log.e(LOG_TAG, Integer.toString(urlConnection.getResponseCode()));
             Log.e(LOG_TAG, readStream(new InputStreamReader(in)));
         } finally {
             urlConnection.disconnect();
         }
+
+        return ret;
     }
 
-    public void sendGet(String surl) throws IOException {
-        URL url = new URL("http://192.168.0.110:8004" + surl);
-        HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
-
-        String data = "";
+    private byte[] readByteStream(InputStream inp) throws IOException {
+        final int bufLen = 1024;
+        byte[] buf = new byte[bufLen];
+        int readLen;
+        IOException exception = null;
 
         try {
-            Log.e(LOG_TAG, "Sending GET: " + url.getPath());
-            urlConnection.setRequestMethod("GET");
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
 
-            InputStream in = urlConnection.getInputStream();
-            Log.e(LOG_TAG, readStream(new InputStreamReader(in)));
-        }
-        catch (Exception e) {
-            InputStream in = urlConnection.getErrorStream();
-            Log.e(LOG_TAG, Integer.toString(urlConnection.getResponseCode()));
-            Log.e(LOG_TAG, readStream(new InputStreamReader(in)));
+            while ((readLen = inp.read(buf, 0, bufLen)) != -1)
+                outputStream.write(buf, 0, readLen);
+
+            return outputStream.toByteArray();
+        } catch (IOException e) {
+            exception = e;
+            throw e;
         } finally {
-            urlConnection.disconnect();
+            if (exception == null) inp.close();
+            else try {
+                inp.close();
+            } catch (IOException e) {
+                exception.addSuppressed(e);
+            }
         }
+
     }
 
     private String readStream(InputStreamReader inp) throws IOException {

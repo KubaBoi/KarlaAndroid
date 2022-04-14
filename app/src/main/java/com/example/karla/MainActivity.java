@@ -6,14 +6,17 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.media.MediaPlayer;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.PowerManager;
-import android.os.Bundle;
 import android.os.StrictMode;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.core.app.ActivityCompat;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.io.IOException;
 
@@ -46,14 +49,15 @@ public class MainActivity extends Activity {
     /* data source */
     private MediaPlayer player = null;
     private SoundMeter mSensor;
-    private String fileName;
+    private String inputFile;
+    private String outputFile;
 
     private boolean waiting = false;
     private boolean recording = false;
     private int silenceTime = 0;
     private int maxSilenceTime = 200;
     private int hearingTime = 0;
-    private int maxHearingTime = 1000;
+    private int maxHearingTime = 100;
 
 
     /**
@@ -67,13 +71,16 @@ public class MainActivity extends Activity {
 
         ActivityCompat.requestPermissions(this, permissions, REQUEST_RECORD_AUDIO_PERMISSION);
 
-        fileName = getExternalCacheDir().getAbsolutePath();
-        fileName += "/temp.wav";
+        inputFile = getExternalCacheDir().getAbsolutePath();
+        inputFile += "/temp.mp3";
+
+        outputFile = getExternalCacheDir().getAbsolutePath();
+        outputFile += "/tempOut.mp3";
 
         player = new MediaPlayer();
 
         mSensor = new SoundMeter();
-        mSensor.start(fileName);
+        mSensor.start(inputFile);
 
         PowerManager pm = (PowerManager) getApplicationContext().getSystemService(Context.POWER_SERVICE);
         mWakeLock = pm.newWakeLock((PowerManager.SCREEN_BRIGHT_WAKE_LOCK | PowerManager.FULL_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP), "TAG");
@@ -83,10 +90,20 @@ public class MainActivity extends Activity {
         StrictMode.setThreadPolicy(policy);
 
         comM = new CommunicationManager();
-        comM.start(fileName);
+        comM.start(inputFile, outputFile);
+
+        JSONObject obj = new JSONObject();
+        try {
+            obj.put("TEXT", "Hello Kuba");
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+
+        if (comM.getFromJson(obj)) {
+            speak();
+        }
 
         mPollTask.run();
-
     }
 
     private Runnable mPollTask = new Runnable() {
@@ -108,7 +125,7 @@ public class MainActivity extends Activity {
                 if (hearingTime >= maxHearingTime) {
                     Log.e(LOG_TAG, "REMOVING OLD FILE");
                     mSensor.stop();
-                    mSensor.start(fileName);
+                    mSensor.start(inputFile);
                     hearingTime = 0;
                 }
             }
@@ -119,12 +136,16 @@ public class MainActivity extends Activity {
                 if (silenceTime >= maxSilenceTime) {
                     Log.e(LOG_TAG, "Saving...");
                     silenceTime = 0;
-                    mSensor.stop();
+                    mSensor.stop(); // stopping recording
+
                     recording = false;
-                    comM.sendWavFile();
-                    mSensor.start(fileName);
-                    //waiting = true;
-                    //initializeMediaPlayer();
+                    waiting = true;
+
+                    if (comM.getFromSound()) { // communicating with backend
+                        speak(); // speaking
+                    } else {
+                        mSensor.start(inputFile);
+                    }
                 }
             }
 
@@ -132,10 +153,10 @@ public class MainActivity extends Activity {
         }
     };
 
-    private void initializeMediaPlayer() {
+    private void speak() {
         try {
             player = new MediaPlayer();
-            player.setDataSource(fileName);
+            player.setDataSource(outputFile);
             player.prepare();
             player.start();
             player.setOnCompletionListener(mp -> {
@@ -144,10 +165,11 @@ public class MainActivity extends Activity {
                 mp.release();
                 mp = null;
 
-                mSensor.start(fileName);
+                mSensor.start(inputFile); // starting recording again
                 waiting = false;
             });
             player.setLooping(false);
+            Log.e(LOG_TAG, "START PLAYING");
         } catch (IOException e) {
             e.printStackTrace();
         }
